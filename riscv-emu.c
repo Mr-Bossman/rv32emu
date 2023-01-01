@@ -8,10 +8,16 @@
 #define MINIRV32_LOAD1(ofs)       *(uint8_t*)(state->mem + ofs)
 
 #define CONCAT(A, B) A##B
-#define CSR(x)	state->csr[CONCAT(csr_, x)]
-#define SETCSR(x, val) do { state->csr[CONCAT(csr_, x)] = val; } while (0)
-#define REG(x)	state->regs[x]
-#define REGSET(x, val)do { state->regs[x] = val; } while (0)
+#define CSR(x)       state->csr[CONCAT(csr_, x)]
+#define SETCSR(x, val)                                                                             \
+	do {                                                                                       \
+		state->csr[CONCAT(csr_, x)] = val;                                                 \
+	} while (0)
+#define REG(x) state->regs[x]
+#define REGSET(x, val)                                                                             \
+	do {                                                                                       \
+		state->regs[x] = val;                                                              \
+	} while (0)
 
 static uint32_t get_pc(struct MiniRV32IMAState* state) { return CSR(pc) - state->base_ofs; }
 static uint32_t op_branch(struct MiniRV32IMAState* state);
@@ -19,9 +25,10 @@ static uint32_t op_load(struct MiniRV32IMAState* state, uint32_t* rrval);
 static uint32_t op_store(struct MiniRV32IMAState* state, uint32_t* rval);
 static uint32_t op_arithmetic(struct MiniRV32IMAState* state, uint32_t* rrval);
 static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval);
+static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval);
 static uint32_t handle_op(struct MiniRV32IMAState* state);
 
-int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state,uint32_t elapsedUs, int count) {
+int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, uint32_t elapsedUs, int count) {
 	uint32_t new_timer = CSR(timerl) + elapsedUs;
 	if (new_timer < CSR(timerl))
 		CSR(timerh)++;
@@ -89,7 +96,7 @@ int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state,uint32_t elapsedUs, int c
 }
 
 static uint32_t handle_op(struct MiniRV32IMAState* state) {
-	uint32_t rval = 0, trap = 0, ir;
+	uint32_t rval = 0, trap = 0, nointr = 0, ir;
 	ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t rdid = (ir >> 7) & 0x1f;
 
@@ -137,21 +144,27 @@ static uint32_t handle_op(struct MiniRV32IMAState* state) {
 	{
 		if (!((ir >> 12) & 0b111))
 			rdid = 0;
+		nointr = 1;
 		trap = op_csr(state, &rval);
 		break;
 	}
+	case 0b0001111: // Fence
+		rdid = 0;
+		break;
+	case 0b0101111:
+		trap = op_amo(state, &rval);
+		break;
 	default:
-		trap = (2 + 1); // Fault: Invalid opcode.
+		return (2 + 1); // Fault: Invalid opcode.
 	}
 
-	if (trap == 0) {
-		if (rdid && rdid != -1) {
-			REGSET(rdid, rval);
-		} else if ((CSR(mip) & (1 << 7)) && (CSR(mie) & (1 << 7) /*mtie*/) &&
-		           (CSR(mstatus) & 0x8 /*mie*/)) {
-			trap = 0x80000007; // Timer interrupt.
-		}
-	}
+	if (rdid && rdid != -1) {
+		REGSET(rdid, rval);
+	} else if ((CSR(mip) & (1 << 7)) && (CSR(mie) & (1 << 7) /*mtie*/) &&
+	           (CSR(mstatus) & 0x8 /*mie*/) && !nointr) {
+		trap = 0x80000007; // Timer interrupt.
+	} else
+		nointr = 0;
 	return trap;
 }
 
@@ -273,9 +286,8 @@ static uint32_t op_store(struct MiniRV32IMAState* state, uint32_t* rval) {
 				CSR(pc) += 4;
 				return rs2; // NOTE: PC will be PC of
 				            // Syscon.
-			} else
-				if (HandleControlStore(addy, rs2))
-					return rs2;
+			} else if (HandleControlStore(addy, rs2))
+				return rs2;
 		} else if (addy >= 0x400 && addy < 0x400 + (18 * 4)) // CSR
 		{
 			state->csr[(addy >> 2) & 0xff] = rs2;
@@ -354,8 +366,8 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 	int microop = (ir >> 12) & 0b111;
 	if ((microop & 3)) // It's a Zicsr function.
 	{
-		if (CSR(pc) != 0x80002058)
-			return (2 + 1);
+		// if (CSR(pc) != 0x80002058)
+		//	return (2 + 1);
 
 		int rs1imm = (ir >> 15) & 0x1f;
 		if (!(microop >> 2))
@@ -388,7 +400,7 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 			CSR(mstatus) |= 8;    // Enable interrupts
 			CSR(extraflags) |= 4; // Infor environment we want to go to sleep.
 			CSR(pc) += 4;
-			return 1;
+			return 0;
 		} else if (((csrno & 0xff) == 0x02)) // MRET
 		{
 			// https://raw.githubusercontent.com/riscv/virtual-memory/main/specs/663-Svpbmt.pdf
@@ -399,6 +411,8 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 			uint32_t startmstatus = CSR(mstatus);
 			uint32_t startextraflags = CSR(extraflags);
 			SETCSR(extraflags, (startextraflags & ~3) | ((startmstatus >> 11) & 3));
+			SETCSR(mstatus,
+			       ((startmstatus & 0x80) >> 4) | ((startextraflags & 3) << 11) | 0x80);
 			CSR(pc) = CSR(mepc) - 4;
 		} else {
 			switch (csrno) {
@@ -417,5 +431,67 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 		}
 	} else
 		return (2 + 1); // Note micrrop 0b100 == undefined.
+	return 0;
+}
+
+static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval)  {
+	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+	uint32_t rs1 = REG((ir >> 15) & 0x1f);
+	uint32_t rs2 = REG((ir >> 20) & 0x1f);
+	uint32_t irmid = (ir >> 27) & 0x1f;
+
+	rs1 -= state->base_ofs;
+
+	if (rs1 >= state->total_mem - 3) {
+		*rval = rs1 + state->base_ofs;
+		return	(7 + 1); // Store/AMO access fault
+	} else {
+		*rval = MINIRV32_LOAD4(rs1);
+
+		// Referenced a little bit of
+		// https://github.com/franzflasch/riscv_em/blob/master/src/core/core.c
+		uint32_t dowrite = 1;
+		switch (irmid) {
+		case 0b00010:
+			dowrite = 0;
+			CSR(extraflags) |= 8;
+			break; // LR.W
+		case 0b00011:
+			*rval = !(CSR(extraflags) & 8);
+			break; // SC.W (Lie and always say it's good)
+		case 0b00001:
+			break; // AMOSWAP.W
+		case 0b00000:
+			rs2 += *rval;
+			break; // AMOADD.W
+		case 0b00100:
+			rs2 ^= *rval;
+			break; // AMOXOR.W
+		case 0b01100:
+			rs2 &= *rval;
+			break; // AMOAND.W
+		case 0b01000:
+			rs2 |= *rval;
+			break; // AMOOR.W
+		case 0b10000:
+			rs2 = ((int32_t)rs2 < (int32_t)*rval) ? rs2 : *rval;
+			break; // AMOMIN.W
+		case 0b10100:
+			rs2 = ((int32_t)rs2 > (int32_t)*rval) ? rs2 : *rval;
+			break; // AMOMAX.W
+		case 0b11000:
+			rs2 = (rs2 < *rval) ? rs2 : *rval;
+			break; // AMOMINU.W
+		case 0b11100:
+			rs2 = (rs2 > *rval) ? rs2 : *rval;
+			break; // AMOMAXU.W
+		default:
+			return (2 + 1);
+			dowrite = 0;
+			break; // Not supported.
+		}
+		if (dowrite)
+			MINIRV32_STORE4(rs1, rs2);
+	}
 	return 0;
 }

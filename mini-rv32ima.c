@@ -140,6 +140,8 @@ restart : {
 	core->regs[10] = 0x00; // hart ID
 	core->regs[11] = dtb_ptr ? (dtb_ptr + MINIRV32_RAM_IMAGE_OFFSET)
 	                         : 0;   // dtb_pa (Must be valid pointer) (Should be pointer to dtb)
+	core->csr[csr_mvendorid] = 0xff0ff0ff; // mvendorid
+	core->csr[csr_misa] = 0x40401101; // marchid
 	core->csr[csr_extraflags] |= 3; // Machine-mode.
 
 	if (dtb_file_name == 0) {

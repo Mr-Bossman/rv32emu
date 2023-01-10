@@ -12,8 +12,9 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include "default64mbdtc.h"
 #include "riscv-emu.h"
+
+extern const unsigned char _binary_sixtyfourmb_dtb_start[], _binary_sixtyfourmb_dtb_end[];
 
 #define MINIRV32_RAM_IMAGE_OFFSET 0x80000000
 static int is_eofd;
@@ -31,6 +32,7 @@ uint8_t* ram_image = 0;
 struct MiniRV32IMAState* core;
 
 int main(int argc, char** argv) {
+	size_t binary_sixtyfourmb_dtb_size = _binary_sixtyfourmb_dtb_end - _binary_sixtyfourmb_dtb_start;
 	int i;
 	long long instct = -1;
 	int show_help = 0;
@@ -116,7 +118,7 @@ restart : {
 			long dtblen = ftell(f);
 			fseek(f, 0, SEEK_SET);
 			dtb_ptr = ram_amt - dtblen - sizeof(struct MiniRV32IMAState);
-			if (fread(ram_image + dtb_ptr, dtblen - sizeof(struct MiniRV32IMAState), 1,
+			if (fread(ram_image + dtb_ptr, dtblen, 1,
 			          f) != 1) {
 				fprintf(stderr, "Error: Could not open dtb \"%s\"\n",
 				        dtb_file_name);
@@ -126,8 +128,8 @@ restart : {
 		}
 	} else {
 		// Load a default dtb.
-		dtb_ptr = ram_amt - sizeof(default64mbdtb) - sizeof(struct MiniRV32IMAState);
-		memcpy(ram_image + dtb_ptr, default64mbdtb, sizeof(default64mbdtb));
+		dtb_ptr = ram_amt -  binary_sixtyfourmb_dtb_size - sizeof(struct MiniRV32IMAState);
+		memcpy(ram_image + dtb_ptr, _binary_sixtyfourmb_dtb_start, binary_sixtyfourmb_dtb_size);
 	}
 }
 

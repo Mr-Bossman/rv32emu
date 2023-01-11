@@ -25,7 +25,6 @@ uint32_t HandleControlStore(uint32_t addy, uint32_t val);
 static int IsKBHit();
 static int ReadKBByte();
 static uint64_t GetTimeMicroseconds();
-static void MiniSleep();
 static void CtrlC();
 
 uint8_t* ram_image = 0;
@@ -34,12 +33,7 @@ struct MiniRV32IMAState* core;
 int main(int argc, char** argv) {
 	size_t binary_sixtyfourmb_dtb_size = _binary_sixtyfourmb_dtb_end - _binary_sixtyfourmb_dtb_start;
 	int i;
-	long long instct = -1;
 	int show_help = 0;
-	int time_divisor = 1;
-	int fixed_update = 0;
-	int do_sleep = 1;
-	int single_step = 0;
 	int dtb_ptr = 0;
 	uint32_t ram_amt = 64 * 1024 * 1024;
 	const char* image_file_name = 0;
@@ -67,7 +61,7 @@ int main(int argc, char** argv) {
 			param++;
 		} while (param_continue);
 	}
-	if (show_help || image_file_name == 0 || time_divisor <= 0) {
+	if (show_help || image_file_name == 0) {
 		fprintf(stderr,
 		        "./mini-rv32imaf [parameters]\n\t-m [ram amount]\n\t-f [running "
 		        "image]\n\t-b [dtb file, or 'disable']\n\t-c instruction count\n\t-s "
@@ -161,32 +155,27 @@ restart : {
 
 	// Image is loaded.
 	uint64_t rt;
-	uint64_t lastTime = (fixed_update) ? 0 : (GetTimeMicroseconds() / time_divisor);
-	int instrs_per_flip = single_step ? 1 : 1024;
-	for (rt = 0; rt < instct + 1 || instct < 0; rt += instrs_per_flip) {
-		uint64_t this_ccount = core->csr[csr_cyclel] | (core->csr[csr_cycleh] << 32);
-		uint32_t elapsedUs = 0;
-		if (fixed_update)
-			elapsedUs = this_ccount / time_divisor - lastTime;
-		else
-			elapsedUs = GetTimeMicroseconds() / time_divisor - lastTime;
-		lastTime += elapsedUs;
-
+	uint64_t time_start = GetTimeMicroseconds();
+	int instrs_per_flip = 10000;
+	for (rt = 0;; rt += instrs_per_flip) {
+		uint64_t time_n = GetTimeMicroseconds() - time_start;
+		core->csr[csr_timerl] = time_n & UINT32_MAX;
+		core->csr[csr_timerh] = time_n >> 32;
 		int ret = MiniRV32IMAStep(
-		    core, elapsedUs,
+		    core, 0,
 		    instrs_per_flip); // Execute upto 1024 cycles before breaking out.
 		switch (ret) {
 		case 0:
 			break;
 		case 1:
-			if (do_sleep)
-				MiniSleep();
+			uint64_t this_ccount = core->csr[csr_cyclel] | ((uint64_t)core->csr[csr_cycleh] << 32);
 			this_ccount += instrs_per_flip;
 			core->csr[csr_cyclel] = this_ccount & UINT32_MAX;
 			core->csr[csr_cycleh] = this_ccount >> 32;
 			break;
 		case 3:
-			instct = 0;
+			DumpState(core, ram_image);
+			return 0;
 			break;
 		case 0x7777:
 			goto restart; // syscon code for restart
@@ -221,7 +210,6 @@ static void CtrlC() {
 	DumpState(core, ram_image);
 	exit(0);
 }
-static void MiniSleep() { usleep(500); }
 
 static uint64_t GetTimeMicroseconds() {
 	struct timeval tv;

@@ -29,10 +29,6 @@ static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval);
 static uint32_t handle_op(struct MiniRV32IMAState* state);
 
 int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, uint32_t elapsedUs, int count) {
-	uint32_t new_timer = CSR(timerl) + elapsedUs;
-	if (new_timer < CSR(timerl))
-		CSR(timerh)++;
-	CSR(timerl) = new_timer;
 
 	// Handle Timer interrupt.
 	if ((CSR(timerh) > CSR(timermatchh) ||
@@ -456,10 +452,9 @@ static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval)  {
 		switch (irmid) {
 		case 0b00010:
 			dowrite = 0;
-			CSR(extraflags) |= 8;
 			break; // LR.W
 		case 0b00011:
-			*rval = !(CSR(extraflags) & 8);
+			*rval = 0;
 			break; // SC.W (Lie and always say it's good)
 		case 0b00001:
 			break; // AMOSWAP.W

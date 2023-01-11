@@ -96,7 +96,7 @@ int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, uint32_t elapsedUs, int 
 }
 
 static uint32_t handle_op(struct MiniRV32IMAState* state) {
-	uint32_t rval = 0, trap = 0, nointr = 0, ir;
+	uint32_t rval = 0, trap = 0, ir;
 	ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t rdid = (ir >> 7) & 0x1f;
 
@@ -144,7 +144,6 @@ static uint32_t handle_op(struct MiniRV32IMAState* state) {
 	{
 		if (!((ir >> 12) & 0b111))
 			rdid = 0;
-		nointr = 1;
 		trap = op_csr(state, &rval);
 		break;
 	}
@@ -161,10 +160,9 @@ static uint32_t handle_op(struct MiniRV32IMAState* state) {
 	if (rdid && rdid != -1) {
 		REGSET(rdid, rval);
 	} else if ((CSR(mip) & (1 << 7)) && (CSR(mie) & (1 << 7) /*mtie*/) &&
-	           (CSR(mstatus) & 0x8 /*mie*/) && !nointr) {
+	           (CSR(mstatus) & 0x8 /*mie*/) ) {
 		trap = 0x80000007; // Timer interrupt.
-	} else
-		nointr = 0;
+	}
 	return trap;
 }
 
@@ -362,7 +360,7 @@ static uint32_t op_arithmetic(struct MiniRV32IMAState* state, uint32_t* rrval) {
 
 static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
-	uint32_t csrno = ir >> 20;
+	uint32_t i, csrno = ir >> 20;
 	int microop = (ir >> 12) & 0b111;
 	if ((microop & 3)) // It's a Zicsr function.
 	{
@@ -373,12 +371,16 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 		if (!(microop >> 2))
 			rs1imm = REG(rs1imm);
 		uint32_t csrnums[18] = {0x300, 0xC00, 0x340, 0x305, 0x304, 0x344,
-		                        0x341, 0x343, 0x342, 0xf11, 0x301};
-		for (int i = 0; i < 18; i++)
-			if (csrno == csrnums[i]) {
-				csrno = i;
+					0x341, 0x343, 0x342, 0xf11, 0x301,0xf14,0x3a0,0x3b0};
+		for (i = 0; i < 18;)
+			if (csrno == csrnums[i++])
 				break;
-			}
+		if(i > 13)
+			return (2 + 1);
+		if(i > 11)
+			return 0;
+
+		csrno = i-1;
 		uint32_t writeval = state->csr[csrno];
 		*rval = writeval;
 		switch (microop & 0x3) {

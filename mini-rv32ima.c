@@ -164,10 +164,10 @@ restart : {
 	uint64_t lastTime = (fixed_update) ? 0 : (GetTimeMicroseconds() / time_divisor);
 	int instrs_per_flip = single_step ? 1 : 1024;
 	for (rt = 0; rt < instct + 1 || instct < 0; rt += instrs_per_flip) {
-		uint64_t* this_ccount = ((uint64_t*)&core->csr[csr_cyclel]);
+		uint64_t this_ccount = core->csr[csr_cyclel] | (core->csr[csr_cycleh] << 32);
 		uint32_t elapsedUs = 0;
 		if (fixed_update)
-			elapsedUs = *this_ccount / time_divisor - lastTime;
+			elapsedUs = this_ccount / time_divisor - lastTime;
 		else
 			elapsedUs = GetTimeMicroseconds() / time_divisor - lastTime;
 		lastTime += elapsedUs;
@@ -181,7 +181,9 @@ restart : {
 		case 1:
 			if (do_sleep)
 				MiniSleep();
-			*this_ccount += instrs_per_flip;
+			this_ccount += instrs_per_flip;
+			core->csr[csr_cyclel] = this_ccount & UINT32_MAX;
+			core->csr[csr_cycleh] = this_ccount >> 32;
 			break;
 		case 3:
 			instct = 0;

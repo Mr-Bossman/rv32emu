@@ -13,7 +13,7 @@ struct MiniRV32IMAState {
 
 uint32_t HandleControlLoad(uint32_t addy);
 uint32_t HandleControlStore(uint32_t addy, uint32_t val);
-int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state,uint32_t elapsedUs, int count);
+int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, int count);
 
 enum {
 	csr_mstatus,

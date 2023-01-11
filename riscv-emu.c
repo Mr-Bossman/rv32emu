@@ -28,7 +28,7 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval);
 static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval);
 static uint32_t handle_op(struct MiniRV32IMAState* state);
 
-int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, uint32_t elapsedUs, int count) {
+int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, int count) {
 
 	// Handle Timer interrupt.
 	if ((CSR(timerh) > CSR(timermatchh) ||
@@ -143,12 +143,12 @@ static uint32_t handle_op(struct MiniRV32IMAState* state) {
 		trap = op_csr(state, &rval);
 		break;
 	}
-	case 0b0001111: // Fence
-		rdid = 0;
-		break;
+	//case 0b0001111: // Fence
+//		rdid = 0;
+//break;
 	case 0b0101111:
-		trap = op_amo(state, &rval);
-		break;
+	//	trap = op_amo(state, &rval);
+	//	break;
 	default:
 		return (2 + 1); // Fault: Invalid opcode.
 	}
@@ -360,8 +360,8 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 	int microop = (ir >> 12) & 0b111;
 	if ((microop & 3)) // It's a Zicsr function.
 	{
-		// if (CSR(pc) != 0x80002058)
-		//	return (2 + 1);
+		if (CSR(pc) != 0x80002058)
+			return (2 + 1);
 
 		int rs1imm = (ir >> 15) & 0x1f;
 		if (!(microop >> 2))

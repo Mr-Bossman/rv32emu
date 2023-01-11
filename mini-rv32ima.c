@@ -156,14 +156,12 @@ restart : {
 	// Image is loaded.
 	uint64_t rt;
 	uint64_t time_start = GetTimeMicroseconds();
-	int instrs_per_flip = 10000;
+	int instrs_per_flip = 100000;
 	for (rt = 0;; rt += instrs_per_flip) {
-		uint64_t time_n = GetTimeMicroseconds() - time_start;
+		uint64_t time_n = (GetTimeMicroseconds() - time_start);
 		core->csr[csr_timerl] = time_n & UINT32_MAX;
 		core->csr[csr_timerh] = time_n >> 32;
-		int ret = MiniRV32IMAStep(
-		    core, 0,
-		    instrs_per_flip); // Execute upto 1024 cycles before breaking out.
+		int ret = MiniRV32IMAStep(core, instrs_per_flip); // Execute upto 1024 cycles before breaking out.
 		switch (ret) {
 		case 0:
 			break;

@@ -143,9 +143,9 @@ static uint32_t handle_op(struct MiniRV32IMAState* state) {
 		trap = op_csr(state, &rval);
 		break;
 	}
-	//case 0b0001111: // Fence
-//		rdid = 0;
-//break;
+	case 0b0001111: // Fence
+	//	rdid = 0;
+	//break;
 	case 0b0101111:
 	//	trap = op_amo(state, &rval);
 	//	break;
@@ -360,9 +360,7 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 	int microop = (ir >> 12) & 0b111;
 	if ((microop & 3)) // It's a Zicsr function.
 	{
-		if (CSR(pc) != 0x80002058)
-			return (2 + 1);
-
+		return (2 + 1);
 		int rs1imm = (ir >> 15) & 0x1f;
 		if (!(microop >> 2))
 			rs1imm = REG(rs1imm);

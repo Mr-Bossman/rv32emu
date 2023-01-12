@@ -15,30 +15,31 @@
 #include "riscv-emu.h"
 
 extern const unsigned char _binary_sixtyfourmb_dtb_start[], _binary_sixtyfourmb_dtb_end[];
+/* Hack to get around gcc weirdness */
+#define _binary_sixtyfourmb_dtb_size (_binary_sixtyfourmb_dtb_end - _binary_sixtyfourmb_dtb_start)
 
 #define MINIRV32_RAM_IMAGE_OFFSET 0x80000000
 static int is_eofd;
 
 static void DumpState(struct MiniRV32IMAState* core, uint8_t* ram_image);
-uint32_t HandleControlLoad(uint32_t addy);
-uint32_t HandleControlStore(uint32_t addy, uint32_t val);
 static int IsKBHit();
 static int ReadKBByte();
 static uint64_t GetTimeMicroseconds();
-static void CtrlC();
+static void exit_now();
 
+static size_t get_Fsize(FILE* fno);
+static int populate_ram(struct MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location);
 uint8_t* ram_image = 0;
-struct MiniRV32IMAState* core;
+struct MiniRV32IMAState core;
 
 int main(int argc, char** argv) {
-	size_t binary_sixtyfourmb_dtb_size = _binary_sixtyfourmb_dtb_end - _binary_sixtyfourmb_dtb_start;
 	int i;
 	int show_help = 0;
-	int dtb_ptr = 0;
+	size_t dtb_location = 0;
 	uint32_t ram_amt = 64 * 1024 * 1024;
 	const char* image_file_name = 0;
 	const char* dtb_file_name = 0;
-	signal(SIGINT, CtrlC);
+	signal(SIGINT, exit_now);
 	for (i = 1; i < argc; i++) {
 		const char* param = argv[i];
 		int param_continue = 0; // Can combine parameters, like -lpt x
@@ -77,76 +78,27 @@ int main(int argc, char** argv) {
 		return -4;
 	}
 
-restart : {
-	FILE* f = fopen(image_file_name, "rb");
-	if (!f || ferror(f)) {
-		fprintf(stderr, "Error: \"%s\" not found\n", image_file_name);
-		return -5;
-	}
-	fseek(f, 0, SEEK_END);
-	long flen = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	if (flen > ram_amt) {
-		fprintf(stderr, "Error: Could not fit RAM image (%ld bytes) into %d\n", flen,
-		        ram_amt);
-		return -6;
-	}
-
-	memset(ram_image, 0, ram_amt);
-	if (fread(ram_image, flen, 1, f) != 1) {
-		fprintf(stderr, "Error: Could not load image.\n");
-		return -7;
-	}
-	fclose(f);
-
-	if (dtb_file_name) {
-		if (strcmp(dtb_file_name, "disable") == 0) {
-			// No DTB reading.
-		} else {
-			f = fopen(dtb_file_name, "rb");
-			if (!f || ferror(f)) {
-				fprintf(stderr, "Error: \"%s\" not found\n", dtb_file_name);
-				return -5;
-			}
-			fseek(f, 0, SEEK_END);
-			long dtblen = ftell(f);
-			fseek(f, 0, SEEK_SET);
-			dtb_ptr = ram_amt - dtblen - sizeof(struct MiniRV32IMAState);
-			if (fread(ram_image + dtb_ptr, dtblen, 1,
-			          f) != 1) {
-				fprintf(stderr, "Error: Could not open dtb \"%s\"\n",
-				        dtb_file_name);
-				return -9;
-			}
-			fclose(f);
-		}
-	} else {
-		// Load a default dtb.
-		dtb_ptr = ram_amt -  binary_sixtyfourmb_dtb_size - sizeof(struct MiniRV32IMAState);
-		memcpy(ram_image + dtb_ptr, _binary_sixtyfourmb_dtb_start, binary_sixtyfourmb_dtb_size);
-	}
-}
+restart :
 
 	// The core lives at the end of RAM.
-	core = (struct MiniRV32IMAState*)(ram_image + ram_amt - sizeof(struct MiniRV32IMAState));
-	core->total_mem = ram_amt;
-	core->mem = ram_image;
-	core->base_ofs = MINIRV32_RAM_IMAGE_OFFSET;
-	core->csr[csr_pc] = MINIRV32_RAM_IMAGE_OFFSET;
-	core->regs[10] = 0x00; // hart ID
-	core->regs[11] = dtb_ptr ? (dtb_ptr + MINIRV32_RAM_IMAGE_OFFSET)
+	core.total_mem = ram_amt;
+	core.mem = ram_image;
+	core.base_ofs = MINIRV32_RAM_IMAGE_OFFSET;
+	core.csr[csr_pc] = MINIRV32_RAM_IMAGE_OFFSET;
+	populate_ram(&core, dtb_file_name,image_file_name,&dtb_location);
+	core.regs[10] = 0x00; // hart ID
+	core.regs[11] = dtb_location ? (dtb_location + MINIRV32_RAM_IMAGE_OFFSET)
 	                         : 0;   // dtb_pa (Must be valid pointer) (Should be pointer to dtb)
-	core->csr[csr_mvendorid] = 0xff0ff0ff; // mvendorid
-	core->csr[csr_misa] = 0x40401101; // marchid
-	core->csr[csr_extraflags] |= 3; // Machine-mode.
-
+	core.csr[csr_mvendorid] = 0xff0ff0ff; // mvendorid
+	core.csr[csr_misa] = 0x40401101; // marchid
+	core.csr[csr_extraflags] |= 3; // Machine-mode.
 	if (dtb_file_name == 0) {
 		// Update system ram size in DTB (but if and only if we're using the default
 		// DTB) Warning - this will need to be updated if the skeleton DTB is ever
 		// modified.
-		uint32_t* dtb = (uint32_t*)(ram_image + dtb_ptr);
+		uint32_t* dtb = (uint32_t*)(ram_image + dtb_location);
 		if (dtb[0x13c / 4] == 0x00c0ff03) {
-			uint32_t validram = dtb_ptr;
+			uint32_t validram = dtb_location;
 			dtb[0x13c / 4] = (validram >> 24) | (((validram >> 16) & 0xff) << 8) |
 			                 (((validram >> 8) & 0xff) << 16) |
 			                 ((validram & 0xff) << 24);
@@ -154,26 +106,24 @@ restart : {
 	}
 
 	// Image is loaded.
-	uint64_t rt;
 	uint64_t time_start = GetTimeMicroseconds();
-	int instrs_per_flip = 100000;
-	for (rt = 0;; rt += instrs_per_flip) {
+	uint64_t instrs_per_flip = 100000;
+	for (uint64_t rt = 0;;rt += instrs_per_flip) {
 		uint64_t time_n = (GetTimeMicroseconds() - time_start);
-		core->csr[csr_timerl] = time_n & UINT32_MAX;
-		core->csr[csr_timerh] = time_n >> 32;
-		int ret = MiniRV32IMAStep(core, instrs_per_flip); // Execute upto 1024 cycles before breaking out.
+		core.csr[csr_timerl] = time_n & UINT32_MAX;
+		core.csr[csr_timerh] = time_n >> 32;
+		int ret = MiniRV32IMAStep(&core, instrs_per_flip);
 		switch (ret) {
 		case 0:
 			break;
 		case 1:
-			uint64_t this_ccount = core->csr[csr_cyclel] | ((uint64_t)core->csr[csr_cycleh] << 32);
+			uint64_t this_ccount = core.csr[csr_cyclel] | ((uint64_t)core.csr[csr_cycleh] << 32);
 			this_ccount += instrs_per_flip;
-			core->csr[csr_cyclel] = this_ccount & UINT32_MAX;
-			core->csr[csr_cycleh] = this_ccount >> 32;
+			core.csr[csr_cyclel] = this_ccount & UINT32_MAX;
+			core.csr[csr_cycleh] = this_ccount >> 32;
 			break;
 		case 3:
-			DumpState(core, ram_image);
-			return 0;
+			exit_now();
 			break;
 		case 0x7777:
 			goto restart; // syscon code for restart
@@ -182,8 +132,64 @@ restart : {
 			break;
 		}
 	}
+	exit_now();
+}
 
-	DumpState(core, ram_image);
+
+ static int populate_ram(struct MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
+	FILE* dtb_fno = NULL;
+	FILE* kern_fno = NULL;
+	size_t dtb_size = (size_t)_binary_sixtyfourmb_dtb_size;
+	size_t kern_size = 0;
+
+	if (F_dtb) {
+		dtb_fno = fopen(F_dtb, "rb");
+		if (!dtb_fno || ferror(dtb_fno)) {
+			fprintf(stderr, "Error: Could not open: \"%s\"\n", F_dtb);
+			return -5;
+		}
+		dtb_size = get_Fsize(dtb_fno);
+	}
+
+	if (F_kern) {
+		kern_fno = fopen(F_kern, "rb");
+		if (!kern_fno || ferror(kern_fno)) {
+			fprintf(stderr, "Error: Could not open: \"%s\"\n", F_kern);
+			return -5;
+		}
+		kern_size = get_Fsize(kern_fno);
+		if((kern_size+dtb_size) > core->total_mem){
+			fprintf(stderr, "Error: Could not fit dtb: %ld, kernel: %ld into ram: %d.\n", dtb_size, kern_size, core->total_mem);
+			return -6;
+		}
+		if (fread(ram_image, kern_size, 1, kern_fno) != 1) {
+			fprintf(stderr, "Error: Could not load image.\n");
+			return -7;
+		}
+		fclose(kern_fno);
+	}
+
+	*dtb_location = core->total_mem - dtb_size - sizeof(struct MiniRV32IMAState);
+	if (F_dtb) {
+		if (fread(ram_image + *dtb_location, dtb_size, 1, dtb_fno) != 1) {
+			fprintf(stderr, "Error: Could not fit dtb: %ld, kernel: %ld into ram: %d.\n", kern_size, dtb_size, core->total_mem);
+			return -6;
+		}
+	} else
+		memcpy(ram_image + *dtb_location, _binary_sixtyfourmb_dtb_start, dtb_size);
+	return 0;
+}
+
+static size_t get_Fsize(FILE* fno) {
+	size_t size = 0;
+	size_t pos = 0;
+	if(!fno || ferror(fno))
+		return -0;
+	pos = ftell(fno);
+	fseek(fno, 0, SEEK_END);
+	size = ftell(fno);
+	fseek(fno, pos, SEEK_SET);
+	return size;
 }
 
 uint32_t HandleControlStore(uint32_t addy, uint32_t val) {
@@ -204,8 +210,8 @@ uint32_t HandleControlLoad(uint32_t addy) {
 	return 0;
 }
 
-static void CtrlC() {
-	DumpState(core, ram_image);
+static void exit_now() {
+	DumpState(&core, ram_image);
 	exit(0);
 }
 
@@ -219,7 +225,7 @@ static int ReadKBByte() {
 	if (is_eofd)
 		return 0xffffffff;
 	char rxchar = 0;
-	int rread = read(fileno(stdin), (char*)&rxchar, 1);
+	int rread = read(0, (char*)&rxchar, 1);
 
 	if (rread > 0) // Tricky: getchar can't be used with arrow keys.
 		return rxchar;
@@ -232,7 +238,7 @@ static int IsKBHit() {
 		return -1;
 	int byteswaiting;
 	ioctl(0, FIONREAD, &byteswaiting);
-	if (!byteswaiting && write(fileno(stdin), 0, 0) != 0) {
+	if (!byteswaiting && write(0, 0, 0) != 0) {
 		is_eofd = 1;
 		return -1;
 	} // Is end-of-file for

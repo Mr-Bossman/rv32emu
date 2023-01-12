@@ -1,13 +1,15 @@
-all : mini-rv32ima
+CFLAGS = -Wno-unused-function  -Wall -pedantic -std=c2x
+
+all : rv32emu
 
 sixtyfourmb.o :
 	objcopy -I binary -O elf64-x86-64 --rename-section .data=.rodata sixtyfourmb.dtb sixtyfourmb.o
 
-mini-rv32ima : mini-rv32ima.c riscv-emu.c sixtyfourmb.o
-	gcc -o $@ sixtyfourmb.o riscv-emu.c mini-rv32ima.c -g -O3 -Wall
+rv32emu : rv32emu.c riscv-emu.c sixtyfourmb.o
+	gcc ${CFLAGS} -o $@ sixtyfourmb.o riscv-emu.c rv32emu.c -g -O3 -Wall
 
-testkern : mini-rv32ima
-	./mini-rv32ima -f Image
+testkern : rv32emu
+	./rv32emu -f Image
 
 clean :
-	rm -rf mini-rv32ima *.o
+	rm -rf rv32emu *.o

@@ -21,11 +21,7 @@ extern const unsigned char _binary_sixtyfourmb_dtb_start[], _binary_sixtyfourmb_
 
 #define MINIRV32_RAM_IMAGE_OFFSET 0x80000000
 
-static int is_eofd;
-
 static void DumpState(MiniRV32IMAState* core);
-static int IsKBHit();
-static int ReadKBByte();
 static uint64_t GetTimeMicroseconds();
 static void exit_now();
 static size_t get_Fsize(FILE* fno);
@@ -58,7 +54,7 @@ int main(int argc, char** argv) {
 			case 'r':
 			{
 				errno = 0;
-				/* FIXME: doesn't check for invalid numbers corectly */
+				/* FIXME: doesn't check for invalid numbers correctly */
 				ram_amt = strtol(optarg, NULL, 16);
 				if (errno)
 				{
@@ -70,7 +66,7 @@ int main(int argc, char** argv) {
 			case 'i':
 			{
 				errno = 0;
-				/* FIXME: doesn't check for invalid numbers corectly */
+				/* FIXME: doesn't check for invalid numbers correctly */
 				isr_per = strtol(optarg, NULL, 16);
 				if (errno)
 				{
@@ -151,8 +147,7 @@ restart :
 	exit_now();
 }
 
-
- static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
+static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
 	FILE* dtb_fno = NULL;
 	FILE* kern_fno = NULL;
 	size_t dtb_size = (size_t)_binary_sixtyfourmb_dtb_size;
@@ -231,10 +226,16 @@ uint32_t HandleControlStore(uint32_t addy, uint32_t val) {
 
 uint32_t HandleControlLoad(uint32_t addy) {
 	// Emulating a 8250 / 16550 UART
+	int byteswaiting, rread;
+	char rxchar = 0;
+	/* Are there pending bytes */
+	ioctl(0, FIONREAD, &byteswaiting);
 	if (addy == 0x10000005)
-		return 0x60 | IsKBHit();
-	else if (addy == 0x10000000 && IsKBHit())
-		return ReadKBByte();
+		return 0x60 | !!byteswaiting;
+	else if (addy == 0x10000000 && byteswaiting) {
+		rread = read(0, &rxchar, 1);
+		return (rread > 0)?rxchar:-1;
+	}
 	return 0;
 }
 
@@ -247,30 +248,6 @@ static uint64_t GetTimeMicroseconds() {
 	struct timeval tv;
 	gettimeofday(&tv, 0);
 	return tv.tv_usec + ((uint64_t)(tv.tv_sec)) * 1000000LL;
-}
-
-static int ReadKBByte() {
-	if (is_eofd)
-		return 0xffffffff;
-	char rxchar = 0;
-	int rread = read(0, (char*)&rxchar, 1);
-
-	if (rread > 0) // Tricky: getchar can't be used with arrow keys.
-		return rxchar;
-	else
-		return -1;
-}
-
-static int IsKBHit() {
-	if (is_eofd)
-		return -1;
-	int byteswaiting;
-	ioctl(0, FIONREAD, &byteswaiting);
-	if (!byteswaiting && write(0, 0, 0) != 0) {
-		is_eofd = 1;
-		return -1;
-	} // Is end-of-file for
-	return !!byteswaiting;
 }
 
 static void DumpState(MiniRV32IMAState* core) {

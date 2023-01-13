@@ -1,23 +1,12 @@
 #include "riscv-emu.h"
 
-#define MINIRV32_STORE4(ofs, val) *(uint32_t*)(state->mem + ofs) = val
-#define MINIRV32_STORE2(ofs, val) *(uint16_t*)(state->mem + ofs) = val
-#define MINIRV32_STORE1(ofs, val) *(uint8_t*)(state->mem + ofs) = val
 #define MINIRV32_LOAD4(ofs)       *(uint32_t*)(state->mem + ofs)
 #define MINIRV32_LOAD2(ofs)       *(uint16_t*)(state->mem + ofs)
 #define MINIRV32_LOAD1(ofs)       *(uint8_t*)(state->mem + ofs)
 
 #define CONCAT(A, B) A##B
 #define CSR(x)       state->csr[CONCAT(csr_, x)]
-#define SETCSR(x, val)                                                                             \
-	do {                                                                                       \
-		state->csr[CONCAT(csr_, x)] = val;                                                 \
-	} while (0)
 #define REG(x) state->regs[x]
-#define REGSET(x, val)                                                                             \
-	do {                                                                                       \
-		state->regs[x] = val;                                                              \
-	} while (0)
 
 static uint32_t get_pc(MiniRV32IMAState* state) { return CSR(pc) - state->base_ofs; }
 static uint32_t op_branch(MiniRV32IMAState* state);
@@ -67,18 +56,17 @@ int32_t MiniRV32IMAStep(MiniRV32IMAState* state, int count) {
 			                       // not a trap.
 			{
 				CSR(extraflags) &= ~8;
-				SETCSR(mcause, trap);
-				SETCSR(mtval, 0);
+				CSR(mcause) = trap;
+				CSR(mtval) = 0;
 				CSR(pc) += 4; // PC needs to point to where the PC will return to.
 			} else {
-				SETCSR(mcause, trap - 1);
-				SETCSR(mtval, (trap > 5 && trap <= 8) ? rval : CSR(pc));
+				CSR(mcause) = trap - 1;
+				CSR(mtval) = (trap > 5 && trap <= 8) ? rval : CSR(pc);
 			}
-			SETCSR(mepc, CSR(pc)); // TRICKY: The kernel advances mepc automatically.
+			CSR(mepc) = CSR(pc); // TRICKY: The kernel advances mepc automatically.
 			// CSR( mstatus ) & 8 = MIE, & 0x80 = MPIE
 			//  On an interrupt, the system moves current MIE into MPIE
-			SETCSR(mstatus,
-			       ((CSR(mstatus) & 0x08) << 4) | ((CSR(extraflags) & 3) << 11));
+			CSR(mstatus) = ((CSR(mstatus) & 0x08) << 4) | ((CSR(extraflags) & 3) << 11);
 			CSR(pc) = (CSR(mtvec) - 4);
 
 			// XXX TODO: Do we actually want to check here? Is this correct?
@@ -154,7 +142,7 @@ static uint32_t handle_op(MiniRV32IMAState* state) {
 	}
 
 	if (rdid && rdid != -1) {
-		REGSET(rdid, rval);
+		REG(rdid) = rval;
 	} else if ((CSR(mip) & (1 << 7)) && (CSR(mie) & (1 << 7) /*mtie*/) &&
 	           (CSR(mstatus) & 0x8 /*mie*/) ) {
 		trap = 0x80000007; // Timer interrupt.
@@ -293,13 +281,13 @@ static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval) {
 		switch ((ir >> 12) & 0x7) {
 		// SB, SH, SW
 		case 0b000:
-			MINIRV32_STORE1(addy, rs2);
+			MINIRV32_LOAD1(addy) = rs2;
 			break;
 		case 0b001:
-			MINIRV32_STORE2(addy, rs2);
+			MINIRV32_LOAD2(addy) = rs2;
 			break;
 		case 0b010:
-			MINIRV32_STORE4(addy, rs2);
+			MINIRV32_LOAD4(addy) = rs2;
 			break;
 		default:
 			return (2 + 1);
@@ -406,9 +394,8 @@ static uint32_t op_csr(MiniRV32IMAState* state, uint32_t* rval) {
 			//  mode.
 			uint32_t startmstatus = CSR(mstatus);
 			uint32_t startextraflags = CSR(extraflags);
-			SETCSR(extraflags, (startextraflags & ~3) | ((startmstatus >> 11) & 3));
-			SETCSR(mstatus,
-			       ((startmstatus & 0x80) >> 4) | ((startextraflags & 3) << 11) | 0x80);
+			CSR(extraflags) = (startextraflags & ~3) | ((startmstatus >> 11) & 3);
+			CSR(mstatus) = ((startmstatus & 0x80) >> 4) | ((startextraflags & 3) << 11) | 0x80;
 			CSR(pc) = CSR(mepc) - 4;
 		} else {
 			switch (csrno) {
@@ -486,7 +473,7 @@ static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval)  {
 			break; // Not supported.
 		}
 		if (dowrite)
-			MINIRV32_STORE4(rs1, rs2);
+			MINIRV32_LOAD4(rs1) = rs2;
 	}
 	return 0;
 }

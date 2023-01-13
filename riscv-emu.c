@@ -19,16 +19,16 @@
 		state->regs[x] = val;                                                              \
 	} while (0)
 
-static uint32_t get_pc(struct MiniRV32IMAState* state) { return CSR(pc) - state->base_ofs; }
-static uint32_t op_branch(struct MiniRV32IMAState* state);
-static uint32_t op_load(struct MiniRV32IMAState* state, uint32_t* rrval);
-static uint32_t op_store(struct MiniRV32IMAState* state, uint32_t* rval);
-static uint32_t op_arithmetic(struct MiniRV32IMAState* state, uint32_t* rrval);
-static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval);
-static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval);
-static uint32_t handle_op(struct MiniRV32IMAState* state);
+static uint32_t get_pc(MiniRV32IMAState* state) { return CSR(pc) - state->base_ofs; }
+static uint32_t op_branch(MiniRV32IMAState* state);
+static uint32_t op_load(MiniRV32IMAState* state, uint32_t* rrval);
+static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval);
+static uint32_t op_arithmetic(MiniRV32IMAState* state, uint32_t* rrval);
+static uint32_t op_csr(MiniRV32IMAState* state, uint32_t* rval);
+static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval);
+static uint32_t handle_op(MiniRV32IMAState* state);
 
-int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, int count) {
+int32_t MiniRV32IMAStep(MiniRV32IMAState* state, int count) {
 
 	// Handle Timer interrupt.
 	if ((CSR(timerh) > CSR(timermatchh) ||
@@ -91,7 +91,7 @@ int32_t MiniRV32IMAStep(struct MiniRV32IMAState* state, int count) {
 	return 0;
 }
 
-static uint32_t handle_op(struct MiniRV32IMAState* state) {
+static uint32_t handle_op(MiniRV32IMAState* state) {
 	uint32_t rval = 0, trap = 0, ir;
 	ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t rdid = (ir >> 7) & 0x1f;
@@ -162,7 +162,7 @@ static uint32_t handle_op(struct MiniRV32IMAState* state) {
 	return trap;
 }
 
-static uint32_t op_branch(struct MiniRV32IMAState* state) {
+static uint32_t op_branch(MiniRV32IMAState* state) {
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t immm4 = ((ir & 0xf00) >> 7) | ((ir & 0x7e000000) >> 20) | ((ir & 0x80) << 4) |
 	                 ((ir >> 31) << 12);
@@ -203,7 +203,7 @@ static uint32_t op_branch(struct MiniRV32IMAState* state) {
 	return 0;
 }
 
-static uint32_t op_load(struct MiniRV32IMAState* state, uint32_t* rrval) {
+static uint32_t op_load(MiniRV32IMAState* state, uint32_t* rrval) {
 	uint32_t rval = 0;
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t rs1 = REG((ir >> 15) & 0x1f);
@@ -256,7 +256,7 @@ static uint32_t op_load(struct MiniRV32IMAState* state, uint32_t* rrval) {
 	return 0;
 }
 
-static uint32_t op_store(struct MiniRV32IMAState* state, uint32_t* rval) {
+static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval) {
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
 
 	uint32_t rs1 = REG((ir >> 15) & 0x1f);
@@ -308,7 +308,7 @@ static uint32_t op_store(struct MiniRV32IMAState* state, uint32_t* rval) {
 	return 0;
 }
 
-static uint32_t op_arithmetic(struct MiniRV32IMAState* state, uint32_t* rrval) {
+static uint32_t op_arithmetic(MiniRV32IMAState* state, uint32_t* rrval) {
 	uint32_t rval = 0;
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
 
@@ -354,7 +354,7 @@ static uint32_t op_arithmetic(struct MiniRV32IMAState* state, uint32_t* rrval) {
 	return 0;
 }
 
-static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
+static uint32_t op_csr(MiniRV32IMAState* state, uint32_t* rval) {
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t i, csrno = ir >> 20;
 	int microop = (ir >> 12) & 0b111;
@@ -430,7 +430,7 @@ static uint32_t op_csr(struct MiniRV32IMAState* state, uint32_t* rval) {
 	return 0;
 }
 
-static uint32_t op_amo(struct MiniRV32IMAState* state, uint32_t* rval)  {
+static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval)  {
 	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
 	uint32_t rs1 = REG((ir >> 15) & 0x1f);
 	uint32_t rs2 = REG((ir >> 20) & 0x1f);

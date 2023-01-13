@@ -9,7 +9,7 @@ rv32emu : rv32emu.c riscv-emu.c sixtyfourmb.o
 	gcc ${CFLAGS} -o $@ sixtyfourmb.o riscv-emu.c rv32emu.c -g -O3 -Wall
 
 testkern : rv32emu
-	./rv32emu -f Image
+	./rv32emu -k Image
 
 clean :
 	rm -rf rv32emu *.o

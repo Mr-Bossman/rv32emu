@@ -1,102 +1,118 @@
-// Copyright 2022 Charles Lohr, you may use this file or any portions herein
-// under any of the BSD, MIT, or CC0 licenses.
-
-#include <math.h>
-#include <signal.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+#include <getopt.h>
+#include <stdint.h>
+#include <signal.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <termios.h>
-#include <unistd.h>
 
 #include "riscv-emu.h"
+
+extern char *optarg;
 
 extern const unsigned char _binary_sixtyfourmb_dtb_start[], _binary_sixtyfourmb_dtb_end[];
 /* Hack to get around gcc weirdness */
 #define _binary_sixtyfourmb_dtb_size (_binary_sixtyfourmb_dtb_end - _binary_sixtyfourmb_dtb_start)
 
 #define MINIRV32_RAM_IMAGE_OFFSET 0x80000000
+
 static int is_eofd;
 
-static void DumpState(struct MiniRV32IMAState* core, uint8_t* ram_image);
+static void DumpState(MiniRV32IMAState* core);
 static int IsKBHit();
 static int ReadKBByte();
 static uint64_t GetTimeMicroseconds();
 static void exit_now();
-
 static size_t get_Fsize(FILE* fno);
-static int populate_ram(struct MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location);
-uint8_t* ram_image = 0;
-struct MiniRV32IMAState core;
+static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location);
+static void help(int code);
+
+MiniRV32IMAState global_cpu_state;
 
 int main(int argc, char** argv) {
-	int i;
-	int show_help = 0;
+	int opt;
 	size_t dtb_location = 0;
 	uint32_t ram_amt = 64 * 1024 * 1024;
-	const char* image_file_name = 0;
-	const char* dtb_file_name = 0;
+	uint64_t isr_per = 100000;
+	const char* image_file_name = NULL;
+	const char* dtb_file_name = NULL;
 	signal(SIGINT, exit_now);
-	for (i = 1; i < argc; i++) {
-		const char* param = argv[i];
-		int param_continue = 0; // Can combine parameters, like -lpt x
-		do {
-			if (param[0] == '-' || param_continue) {
-				switch (param[1]) {
-				case 'f':
-					image_file_name = (++i < argc) ? argv[i] : 0;
-					break;
-				case 'b':
-					dtb_file_name = (++i < argc) ? argv[i] : 0;
-					break;
-				default:
-					break;
+	while ((opt = getopt(argc, argv, "hk:b:r:")) != -1)
+	{
+		switch (opt)
+		{
+			case 'h':
+				help(0);
+				break;
+			case 'k':
+				image_file_name = optarg;
+				break;
+			case 'b':
+				dtb_file_name = optarg;
+				break;
+			case 'r':
+			{
+				errno = 0;
+				/* FIXME: doesn't check for invalid numbers corectly */
+				ram_amt = strtol(optarg, NULL, 16);
+				if (errno)
+				{
+					printf("invalid value for -%c", opt);
+					help(EXIT_FAILURE);
 				}
-			} else {
-				show_help = 1;
 				break;
 			}
-			param++;
-		} while (param_continue);
-	}
-	if (show_help || image_file_name == 0) {
-		fprintf(stderr,
-		        "./mini-rv32imaf [parameters]\n\t-m [ram amount]\n\t-f [running "
-		        "image]\n\t-b [dtb file, or 'disable']\n\t-c instruction count\n\t-s "
-		        "single step with full processor state\n\t-t time divion base\n\t-l "
-		        "lock time base to instruction count\n\t-p disable sleep when "
-		        "wfi\n\t-d fail out immediately on all faults\n");
-		return 1;
+			case 'i':
+			{
+				errno = 0;
+				/* FIXME: doesn't check for invalid numbers corectly */
+				isr_per = strtol(optarg, NULL, 16);
+				if (errno)
+				{
+					printf("invalid value for -%c", opt);
+					help(EXIT_FAILURE);
+				}
+				break;
+			}
+			default:
+				help(EXIT_FAILURE);
+		}
 	}
 
-	ram_image = malloc(ram_amt);
-	if (!ram_image) {
+	if(!image_file_name){
+		puts("Error: The '-k' parameter is required\n");
+		help(EXIT_FAILURE);
+	}
+
+	global_cpu_state.total_mem = ram_amt;
+	global_cpu_state.mem = malloc(ram_amt);
+	if (!global_cpu_state.mem) {
 		fprintf(stderr, "Error: could not allocate system image.\n");
 		return -4;
 	}
+	populate_ram(&global_cpu_state, dtb_file_name,image_file_name,&dtb_location);
 
 restart :
+	global_cpu_state.base_ofs = MINIRV32_RAM_IMAGE_OFFSET;
+	global_cpu_state.csr[csr_pc] = MINIRV32_RAM_IMAGE_OFFSET;
+	global_cpu_state.regs[10] = 0x00; // hart ID
+	/* dtb_pa (Must be valid pointer) (Should be pointer to dtb) */
+	global_cpu_state.regs[11] = dtb_location ? (dtb_location + MINIRV32_RAM_IMAGE_OFFSET) : 0;
+	/* Read only CSRs */
+	global_cpu_state.csr[csr_mvendorid] = 0xff0ff0ff; // mvendorid
+	global_cpu_state.csr[csr_misa] = 0x40401101; // marchid
+	global_cpu_state.csr[csr_extraflags] = 3; // Machine-mode.
 
-	// The core lives at the end of RAM.
-	core.total_mem = ram_amt;
-	core.mem = ram_image;
-	core.base_ofs = MINIRV32_RAM_IMAGE_OFFSET;
-	core.csr[csr_pc] = MINIRV32_RAM_IMAGE_OFFSET;
-	populate_ram(&core, dtb_file_name,image_file_name,&dtb_location);
-	core.regs[10] = 0x00; // hart ID
-	core.regs[11] = dtb_location ? (dtb_location + MINIRV32_RAM_IMAGE_OFFSET)
-	                         : 0;   // dtb_pa (Must be valid pointer) (Should be pointer to dtb)
-	core.csr[csr_mvendorid] = 0xff0ff0ff; // mvendorid
-	core.csr[csr_misa] = 0x40401101; // marchid
-	core.csr[csr_extraflags] |= 3; // Machine-mode.
 	if (dtb_file_name == 0) {
 		// Update system ram size in DTB (but if and only if we're using the default
 		// DTB) Warning - this will need to be updated if the skeleton DTB is ever
 		// modified.
-		uint32_t* dtb = (uint32_t*)(ram_image + dtb_location);
+		uint32_t* dtb = (uint32_t*)(global_cpu_state.mem + dtb_location);
 		if (dtb[0x13c / 4] == 0x00c0ff03) {
 			uint32_t validram = dtb_location;
 			dtb[0x13c / 4] = (validram >> 24) | (((validram >> 16) & 0xff) << 8) |
@@ -107,20 +123,20 @@ restart :
 
 	// Image is loaded.
 	uint64_t time_start = GetTimeMicroseconds();
-	uint64_t instrs_per_flip = 100000;
-	for (uint64_t rt = 0;;rt += instrs_per_flip) {
+	while(1) {
 		uint64_t time_n = (GetTimeMicroseconds() - time_start);
-		core.csr[csr_timerl] = time_n & UINT32_MAX;
-		core.csr[csr_timerh] = time_n >> 32;
-		int ret = MiniRV32IMAStep(&core, instrs_per_flip);
+		global_cpu_state.csr[csr_timerl] = time_n & UINT32_MAX;
+		global_cpu_state.csr[csr_timerh] = time_n >> 32;
+		int ret = MiniRV32IMAStep(&global_cpu_state, isr_per);
 		switch (ret) {
 		case 0:
 			break;
 		case 1:
-			uint64_t this_ccount = core.csr[csr_cyclel] | ((uint64_t)core.csr[csr_cycleh] << 32);
-			this_ccount += instrs_per_flip;
-			core.csr[csr_cyclel] = this_ccount & UINT32_MAX;
-			core.csr[csr_cycleh] = this_ccount >> 32;
+			/* This isn't necessary */
+			uint64_t this_ccount = global_cpu_state.csr[csr_cyclel] | ((uint64_t)global_cpu_state.csr[csr_cycleh] << 32);
+			this_ccount += isr_per;
+			global_cpu_state.csr[csr_cyclel] = this_ccount & UINT32_MAX;
+			global_cpu_state.csr[csr_cycleh] = this_ccount >> 32;
 			break;
 		case 3:
 			exit_now();
@@ -136,7 +152,7 @@ restart :
 }
 
 
- static int populate_ram(struct MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
+ static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
 	FILE* dtb_fno = NULL;
 	FILE* kern_fno = NULL;
 	size_t dtb_size = (size_t)_binary_sixtyfourmb_dtb_size;
@@ -162,21 +178,21 @@ restart :
 			fprintf(stderr, "Error: Could not fit dtb: %ld, kernel: %ld into ram: %d.\n", dtb_size, kern_size, core->total_mem);
 			return -6;
 		}
-		if (fread(ram_image, kern_size, 1, kern_fno) != 1) {
+		if (fread(core->mem, kern_size, 1, kern_fno) != 1) {
 			fprintf(stderr, "Error: Could not load image.\n");
 			return -7;
 		}
 		fclose(kern_fno);
 	}
 
-	*dtb_location = core->total_mem - dtb_size - sizeof(struct MiniRV32IMAState);
+	*dtb_location = core->total_mem - dtb_size;
 	if (F_dtb) {
-		if (fread(ram_image + *dtb_location, dtb_size, 1, dtb_fno) != 1) {
+		if (fread(core->mem + *dtb_location, dtb_size, 1, dtb_fno) != 1) {
 			fprintf(stderr, "Error: Could not fit dtb: %ld, kernel: %ld into ram: %d.\n", kern_size, dtb_size, core->total_mem);
 			return -6;
 		}
 	} else
-		memcpy(ram_image + *dtb_location, _binary_sixtyfourmb_dtb_start, dtb_size);
+		memcpy(core->mem + *dtb_location, _binary_sixtyfourmb_dtb_start, dtb_size);
 	return 0;
 }
 
@@ -190,6 +206,18 @@ static size_t get_Fsize(FILE* fno) {
 	size = ftell(fno);
 	fseek(fno, pos, SEEK_SET);
 	return size;
+}
+
+static void help(int code)
+{
+ 	puts("+----------------------------------------+");
+ 	puts("| -h - This message.                     |");
+	puts("| -k - Boot Image @0x80000000 (required).|");
+	puts("| -d - DTB Image.                        |");
+	puts("| -r - Total RAM to use in read in HEX.  |");
+	puts("| -i - Instructions before timer update. |");
+ 	puts("+----------------------------------------+");
+ 	exit(code);
 }
 
 uint32_t HandleControlStore(uint32_t addy, uint32_t val) {
@@ -211,7 +239,7 @@ uint32_t HandleControlLoad(uint32_t addy) {
 }
 
 static void exit_now() {
-	DumpState(&core, ram_image);
+	DumpState(&global_cpu_state);
 	exit(0);
 }
 
@@ -245,14 +273,14 @@ static int IsKBHit() {
 	return !!byteswaiting;
 }
 
-static void DumpState(struct MiniRV32IMAState* core, uint8_t* ram_image) {
+static void DumpState(MiniRV32IMAState* core) {
 	uint32_t pc = core->csr[csr_pc];
 	uint32_t pc_offset = pc - MINIRV32_RAM_IMAGE_OFFSET;
 	uint32_t ir = 0;
 
 	printf("PC: %08x ", pc);
 	if (pc_offset >= 0 && pc_offset < (64*1024*1024) - 3) {
-		ir = *((uint32_t*)(&((uint8_t*)ram_image)[pc_offset]));
+		ir = *((uint32_t*)(&((uint8_t*)core->mem)[pc_offset]));
 		printf("[0x%08x] ", ir);
 	} else
 		printf("[xxxxxxxxxx] ");

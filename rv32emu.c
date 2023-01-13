@@ -21,17 +21,17 @@ extern const unsigned char _binary_sixtyfourmb_dtb_start[], _binary_sixtyfourmb_
 
 #define MINIRV32_RAM_IMAGE_OFFSET 0x80000000
 
-static void DumpState(MiniRV32IMAState* core);
+static void DumpState(RV32_CPU* core);
 static uint64_t GetTimeMicroseconds();
 static void exit_now();
 static size_t get_Fsize(FILE* fno);
-static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location);
+static int populate_ram(RV32_CPU* core, const char* F_dtb, const char* F_kern, size_t *dtb_location);
 static void help(int code);
 
-MiniRV32IMAState global_cpu_state;
+RV32_CPU global_cpu_state;
 
 int main(int argc, char** argv) {
-	int opt;
+	int opt, err;
 	size_t dtb_location = 0;
 	uint32_t ram_amt = 64 * 1024 * 1024;
 	uint64_t isr_per = 100000;
@@ -91,7 +91,9 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Error: could not allocate system image.\n");
 		return -4;
 	}
-	populate_ram(&global_cpu_state, dtb_file_name,image_file_name,&dtb_location);
+	err = populate_ram(&global_cpu_state, dtb_file_name,image_file_name,&dtb_location);
+	if(err)
+		return err;
 
 restart :
 	global_cpu_state.base_ofs = MINIRV32_RAM_IMAGE_OFFSET;
@@ -123,14 +125,14 @@ restart :
 		uint64_t time_n = (GetTimeMicroseconds() - time_start);
 		global_cpu_state.csr[csr_timerl] = time_n & UINT32_MAX;
 		global_cpu_state.csr[csr_timerh] = time_n >> 32;
-		int ret = MiniRV32IMAStep(&global_cpu_state, isr_per);
+		int ret = RV32_step(&global_cpu_state, isr_per);
 		switch (ret) {
 		case 0:
 			break;
 		case 1:
 			/* This isn't necessary */
 			uint64_t this_ccount = global_cpu_state.csr[csr_cyclel] | ((uint64_t)global_cpu_state.csr[csr_cycleh] << 32);
-			this_ccount += isr_per;
+			this_ccount++;
 			global_cpu_state.csr[csr_cyclel] = this_ccount & UINT32_MAX;
 			global_cpu_state.csr[csr_cycleh] = this_ccount >> 32;
 			break;
@@ -147,7 +149,7 @@ restart :
 	exit_now();
 }
 
-static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
+static int populate_ram(RV32_CPU* core, const char* F_dtb, const char* F_kern, size_t *dtb_location) {
 	FILE* dtb_fno = NULL;
 	FILE* kern_fno = NULL;
 	size_t dtb_size = (size_t)_binary_sixtyfourmb_dtb_size;
@@ -157,7 +159,7 @@ static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F
 		dtb_fno = fopen(F_dtb, "rb");
 		if (!dtb_fno || ferror(dtb_fno)) {
 			fprintf(stderr, "Error: Could not open: \"%s\"\n", F_dtb);
-			return -5;
+			return -2;
 		}
 		dtb_size = get_Fsize(dtb_fno);
 	}
@@ -166,16 +168,16 @@ static int populate_ram(MiniRV32IMAState* core, const char* F_dtb, const char* F
 		kern_fno = fopen(F_kern, "rb");
 		if (!kern_fno || ferror(kern_fno)) {
 			fprintf(stderr, "Error: Could not open: \"%s\"\n", F_kern);
-			return -5;
+			return -3;
 		}
 		kern_size = get_Fsize(kern_fno);
 		if((kern_size+dtb_size) > core->total_mem){
 			fprintf(stderr, "Error: Could not fit dtb: %ld, kernel: %ld into ram: %d.\n", dtb_size, kern_size, core->total_mem);
-			return -6;
+			return -4;
 		}
 		if (fread(core->mem, kern_size, 1, kern_fno) != 1) {
 			fprintf(stderr, "Error: Could not load image.\n");
-			return -7;
+			return -5;
 		}
 		fclose(kern_fno);
 	}
@@ -250,7 +252,7 @@ static uint64_t GetTimeMicroseconds() {
 	return tv.tv_usec + ((uint64_t)(tv.tv_sec)) * 1000000LL;
 }
 
-static void DumpState(MiniRV32IMAState* core) {
+static void DumpState(RV32_CPU* core) {
 	uint32_t pc = core->csr[csr_pc];
 	uint32_t pc_offset = pc - MINIRV32_RAM_IMAGE_OFFSET;
 	uint32_t ir = 0;

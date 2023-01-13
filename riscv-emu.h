@@ -3,17 +3,17 @@
 #ifndef __RISCV_EMU_H__
 #define __RISCV_EMU_H__
 
-typedef struct MiniRV32IMAState {
+typedef struct RV32_CPU {
 	uint32_t regs[32];
 	uint32_t csr[18];
 	uint32_t total_mem;
 	uint32_t base_ofs;
 	uint8_t *mem;
-} MiniRV32IMAState;
+} RV32_CPU;
 
 uint32_t HandleControlLoad(uint32_t addy);
 uint32_t HandleControlStore(uint32_t addy, uint32_t val);
-int32_t MiniRV32IMAStep(MiniRV32IMAState* state, int count);
+int32_t RV32_step(RV32_CPU* state, int count);
 
 enum {
 	csr_mstatus,

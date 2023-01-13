@@ -1,23 +1,23 @@
 #include "riscv-emu.h"
 
-#define MINIRV32_LOAD4(ofs)       *(uint32_t*)(state->mem + ofs)
-#define MINIRV32_LOAD2(ofs)       *(uint16_t*)(state->mem + ofs)
-#define MINIRV32_LOAD1(ofs)       *(uint8_t*)(state->mem + ofs)
+#define RV32_CAST4B(ofs)       *(uint32_t*)(state->mem + ofs)
+#define RV32_CAST2B(ofs)       *(uint16_t*)(state->mem + ofs)
+#define RV32_CAST1B(ofs)       *(uint8_t*)(state->mem + ofs)
 
 #define CONCAT(A, B) A##B
 #define CSR(x)       state->csr[CONCAT(csr_, x)]
 #define REG(x) state->regs[x]
 
-static uint32_t get_pc(MiniRV32IMAState* state) { return CSR(pc) - state->base_ofs; }
-static uint32_t op_branch(MiniRV32IMAState* state);
-static uint32_t op_load(MiniRV32IMAState* state, uint32_t* rrval);
-static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval);
-static uint32_t op_arithmetic(MiniRV32IMAState* state, uint32_t* rrval);
-static uint32_t op_csr(MiniRV32IMAState* state, uint32_t* rval);
-static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval);
-static uint32_t handle_op(MiniRV32IMAState* state);
+static uint32_t get_pc(RV32_CPU* state) { return CSR(pc) - state->base_ofs; }
+static uint32_t op_branch(RV32_CPU* state);
+static uint32_t op_load(RV32_CPU* state, uint32_t* rrval);
+static uint32_t op_store(RV32_CPU* state, uint32_t* rval);
+static uint32_t op_arithmetic(RV32_CPU* state, uint32_t* rrval);
+static uint32_t op_csr(RV32_CPU* state, uint32_t* rval);
+static uint32_t op_amo(RV32_CPU* state, uint32_t* rval);
+static uint32_t handle_op(RV32_CPU* state);
 
-int32_t MiniRV32IMAStep(MiniRV32IMAState* state, int count) {
+int32_t RV32_step(RV32_CPU* state, int count) {
 
 	// Handle Timer interrupt.
 	if ((CSR(timerh) > CSR(timermatchh) ||
@@ -79,9 +79,9 @@ int32_t MiniRV32IMAStep(MiniRV32IMAState* state, int count) {
 	return 0;
 }
 
-static uint32_t handle_op(MiniRV32IMAState* state) {
+static uint32_t handle_op(RV32_CPU* state) {
 	uint32_t rval = 0, trap = 0, ir;
-	ir = MINIRV32_LOAD4(get_pc(state));
+	ir = RV32_CAST4B(get_pc(state));
 	uint32_t rdid = (ir >> 7) & 0x1f;
 
 	switch (ir & 0x7f) {
@@ -150,8 +150,8 @@ static uint32_t handle_op(MiniRV32IMAState* state) {
 	return trap;
 }
 
-static uint32_t op_branch(MiniRV32IMAState* state) {
-	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+static uint32_t op_branch(RV32_CPU* state) {
+	uint32_t ir = RV32_CAST4B(get_pc(state));
 	uint32_t immm4 = ((ir & 0xf00) >> 7) | ((ir & 0x7e000000) >> 20) | ((ir & 0x80) << 4) |
 	                 ((ir >> 31) << 12);
 	if (immm4 & 0x1000)
@@ -191,9 +191,9 @@ static uint32_t op_branch(MiniRV32IMAState* state) {
 	return 0;
 }
 
-static uint32_t op_load(MiniRV32IMAState* state, uint32_t* rrval) {
+static uint32_t op_load(RV32_CPU* state, uint32_t* rrval) {
 	uint32_t rval = 0;
-	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+	uint32_t ir = RV32_CAST4B(get_pc(state));
 	uint32_t rs1 = REG((ir >> 15) & 0x1f);
 	uint32_t imm = ir >> 20;
 	int32_t imm_se = imm | ((imm & 0x800) ? 0xfffff000 : 0);
@@ -222,19 +222,19 @@ static uint32_t op_load(MiniRV32IMAState* state, uint32_t* rrval) {
 		switch ((ir >> 12) & 0x7) {
 		// LB, LH, LW, LBU, LHU
 		case 0b000:
-			rval = (int8_t)MINIRV32_LOAD1(rsval);
+			rval = (int8_t)RV32_CAST1B(rsval);
 			break;
 		case 0b001:
-			rval = (int16_t)MINIRV32_LOAD2(rsval);
+			rval = (int16_t)RV32_CAST2B(rsval);
 			break;
 		case 0b010:
-			rval = MINIRV32_LOAD4(rsval);
+			rval = RV32_CAST4B(rsval);
 			break;
 		case 0b100:
-			rval = MINIRV32_LOAD1(rsval);
+			rval = RV32_CAST1B(rsval);
 			break;
 		case 0b101:
-			rval = MINIRV32_LOAD2(rsval);
+			rval = RV32_CAST2B(rsval);
 			break;
 		default:
 			return 3;
@@ -244,8 +244,8 @@ static uint32_t op_load(MiniRV32IMAState* state, uint32_t* rrval) {
 	return 0;
 }
 
-static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval) {
-	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+static uint32_t op_store(RV32_CPU* state, uint32_t* rval) {
+	uint32_t ir = RV32_CAST4B(get_pc(state));
 
 	uint32_t rs1 = REG((ir >> 15) & 0x1f);
 	uint32_t rs2 = REG((ir >> 20) & 0x1f);
@@ -281,13 +281,13 @@ static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval) {
 		switch ((ir >> 12) & 0x7) {
 		// SB, SH, SW
 		case 0b000:
-			MINIRV32_LOAD1(addy) = rs2;
+			RV32_CAST1B(addy) = rs2;
 			break;
 		case 0b001:
-			MINIRV32_LOAD2(addy) = rs2;
+			RV32_CAST2B(addy) = rs2;
 			break;
 		case 0b010:
-			MINIRV32_LOAD4(addy) = rs2;
+			RV32_CAST4B(addy) = rs2;
 			break;
 		default:
 			return (2 + 1);
@@ -296,9 +296,9 @@ static uint32_t op_store(MiniRV32IMAState* state, uint32_t* rval) {
 	return 0;
 }
 
-static uint32_t op_arithmetic(MiniRV32IMAState* state, uint32_t* rrval) {
+static uint32_t op_arithmetic(RV32_CPU* state, uint32_t* rrval) {
 	uint32_t rval = 0;
-	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+	uint32_t ir = RV32_CAST4B(get_pc(state));
 
 	uint32_t imm = ir >> 20;
 	imm = imm | ((imm & 0x800) ? 0xfffff000 : 0);
@@ -342,8 +342,8 @@ static uint32_t op_arithmetic(MiniRV32IMAState* state, uint32_t* rrval) {
 	return 0;
 }
 
-static uint32_t op_csr(MiniRV32IMAState* state, uint32_t* rval) {
-	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+static uint32_t op_csr(RV32_CPU* state, uint32_t* rval) {
+	uint32_t ir = RV32_CAST4B(get_pc(state));
 	uint32_t i, csrno = ir >> 20;
 	int microop = (ir >> 12) & 0b111;
 	if ((microop & 3)) // It's a Zicsr function.
@@ -417,8 +417,8 @@ static uint32_t op_csr(MiniRV32IMAState* state, uint32_t* rval) {
 	return 0;
 }
 
-static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval)  {
-	uint32_t ir = MINIRV32_LOAD4(get_pc(state));
+static uint32_t op_amo(RV32_CPU* state, uint32_t* rval)  {
+	uint32_t ir = RV32_CAST4B(get_pc(state));
 	uint32_t rs1 = REG((ir >> 15) & 0x1f);
 	uint32_t rs2 = REG((ir >> 20) & 0x1f);
 	uint32_t irmid = (ir >> 27) & 0x1f;
@@ -429,7 +429,7 @@ static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval)  {
 		*rval = rs1 + state->base_ofs;
 		return	(7 + 1); // Store/AMO access fault
 	} else {
-		*rval = MINIRV32_LOAD4(rs1);
+		*rval = RV32_CAST4B(rs1);
 
 		// Referenced a little bit of
 		// https://github.com/franzflasch/riscv_em/blob/master/src/core/core.c
@@ -473,7 +473,7 @@ static uint32_t op_amo(MiniRV32IMAState* state, uint32_t* rval)  {
 			break; // Not supported.
 		}
 		if (dowrite)
-			MINIRV32_LOAD4(rs1) = rs2;
+			RV32_CAST4B(rs1) = rs2;
 	}
 	return 0;
 }

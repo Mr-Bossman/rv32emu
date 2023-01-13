@@ -5,7 +5,7 @@
 #define RV32_CAST1B(ofs)       *(uint8_t*)(state->mem + ofs)
 
 #define CONCAT(A, B) A##B
-#define CSR(x)       state->csr[CONCAT(csr_, x)]
+#define CSR(x) state->csr[CONCAT(csr_, x)]
 #define REG(x) state->regs[x]
 
 static uint32_t get_pc(RV32_CPU* state) { return CSR(pc) - state->base_ofs; }
